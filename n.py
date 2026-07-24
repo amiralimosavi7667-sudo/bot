@@ -26,8 +26,7 @@ from telegram.ext import (
 )
 from telegram.ext import ApplicationHandlerStop
 
-# 🔴 توکن باتت رو اینجا بذار
-TOKEN = "8122230876:AAHVnsvD3dw_z7PKi0sh7BxaR-3wiUDA5Bk"
+# این برنامه برای سروش‌پلاس با کتابخانه splusthon و ورود شماره‌ای اجرا می‌شود.
 ADMIN_ACTIVATION_CODE = "admin1212121212"
 ADMIN_IDS = {6930517587}
 SUPPORT_ADMIN_ID = 6930517587
@@ -244,6 +243,85 @@ duel_sessions: dict[str, dict] = {}
 duel_requests: dict[str, dict] = {}
 _USER_LAST_SAVE = 0.0
 USER_SAVE_MIN_INTERVAL = 2.0
+TEXT_ONLY_MODE = True
+SPLUSTHON_PHONE = os.getenv("SPLUSTHON_PHONE", "")
+SPLUSTHON_SESSION = os.getenv("SPLUSTHON_SESSION", "solarwar_splus")
+
+
+def remove_visual_reply_markup(kwargs: dict) -> dict:
+    """Remove Telegram button panels so navigation stays completely text based."""
+    if TEXT_ONLY_MODE:
+        kwargs.pop("reply_markup", None)
+    return kwargs
+
+
+def patch_telegram_text_only_mode() -> None:
+    """Drop inline/reply keyboards from outgoing messages without changing game logic."""
+    if not TEXT_ONLY_MODE or getattr(Message.reply_text, "_text_only_patched", False):
+        return
+
+    original_reply_text = Message.reply_text
+    original_bot_send_message = Bot.send_message
+
+    async def text_only_reply_text(self, *args, **kwargs):
+        return await original_reply_text(self, *args, **remove_visual_reply_markup(kwargs))
+
+    async def text_only_send_message(self, *args, **kwargs):
+        return await original_bot_send_message(self, *args, **remove_visual_reply_markup(kwargs))
+
+    text_only_reply_text._text_only_patched = True
+    Message.reply_text = text_only_reply_text
+    Bot.send_message = text_only_send_message
+
+
+def build_splusthon_client():
+    """Create a Soroush Plus self-account client with phone-number login only."""
+    if not SPLUSTHON_PHONE:
+        raise RuntimeError("SPLUSTHON_PHONE را برای ورود شماره‌ای سروش‌پلاس تنظیم کنید.")
+    try:
+        import splusthon  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("کتابخانه splusthon نصب نیست؛ اول با pip install splusthon نصبش کنید.") from exc
+
+    client_factory = (
+        getattr(splusthon, "Client", None)
+        or getattr(splusthon, "SPlusThon", None)
+        or getattr(splusthon, "Splus", None)
+    )
+    if client_factory is None:
+        raise RuntimeError("در splusthon کلاس Client/SPlusThon/Splus پیدا نشد.")
+
+    attempts = (
+        {"phone": SPLUSTHON_PHONE, "session": SPLUSTHON_SESSION},
+        {"phone_number": SPLUSTHON_PHONE, "session": SPLUSTHON_SESSION},
+        {"phone": SPLUSTHON_PHONE},
+        {"phone_number": SPLUSTHON_PHONE},
+        {"session": SPLUSTHON_SESSION},
+        {},
+    )
+    last_error = None
+    for kwargs in attempts:
+        try:
+            client = client_factory(**kwargs)
+            if not kwargs.get("phone") and not kwargs.get("phone_number"):
+                for setter_name in ("login", "sign_in", "auth", "connect"):
+                    setter = getattr(client, setter_name, None)
+                    if callable(setter):
+                        setter(SPLUSTHON_PHONE)
+                        break
+            return client
+        except TypeError as exc:
+            last_error = exc
+    raise RuntimeError("ساخت کلاینت splusthon با امضای‌های شناخته‌شده ممکن نشد.") from last_error
+
+
+def run_splusthon_self_account() -> None:
+    """Run only on Soroush Plus through SPlusThon; no Telegram token/runtime is used."""
+    client = build_splusthon_client()
+    starter = getattr(client, "start", None) or getattr(client, "run", None) or getattr(client, "idle", None)
+    if starter is None:
+        raise RuntimeError("در کلاینت splusthon متد start/run/idle پیدا نشد.")
+    starter()
 
 LEAGUE_TIERS = [
     (0, "🎗 تازه‌کار"),
@@ -279,17 +357,7 @@ STARPASS_REWARDS = [
     {"day": 9, "label": "10000 سکه", "coins": 10000},
     {"day": 10, "label": "50 جم", "gems": 50},
 ]
-STARPASS_CHAT_STICKERS = [
-    ("🔥 استیکر آتش", "🔥"),
-    ("❄️ استیکر یخ", "❄️"),
-    ("⚡ استیکر برق", "⚡"),
-    ("⭐ استیکر ستاره", "⭐"),
-    ("💎 استیکر الماس", "💎"),
-    ("🌟 استیکر پریمیوم", "🌟"),
-    ("👑 استیکر تاج", "👑"),
-    ("🚀 استیکر موشک", "🚀"),
-    ("🎖️ استیکر مدال", "🎖️"),
-]
+STARPASS_CHAT_STICKERS = []
 
 GLOBAL_ATTACK_COOLDOWN_SECONDS = 90
 GLOBAL_ATTACK_REROLL_COST = 10
@@ -1748,10 +1816,8 @@ def normalize_gift_code(code: str) -> str:
 
 
 async def send_missile_sticker(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
-    try:
-        await context.bot.send_message(chat_id=chat_id, text="🚀💥")
-    except Exception:
-        return
+    """Text-only mode: do not send attack stickers/animation messages."""
+    return
 
 
 async def send_menu_transition(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -8747,12 +8813,19 @@ async def log_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def main():
-    global telegram_app
     setup_logging()
     load_user_data_store()
     load_pending_payments()
     load_clan_data_store()
-    app = ApplicationBuilder().token(TOKEN).build()
+    run_splusthon_self_account()
+    return
+
+
+def run_legacy_telegram_runtime():
+    global telegram_app
+    patch_telegram_text_only_mode()
+    raise RuntimeError("Telegram runtime حذف شده است؛ برنامه فقط با splusthon برای سروش‌پلاس اجرا می‌شود.")
+    app = ApplicationBuilder().token("").build()
     telegram_app = app
 
     app.add_handler(MessageHandler(filters.ALL, membership_message_gate), group=-1)
