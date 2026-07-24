@@ -1,0 +1,5 @@
+
+# Local SPlusThon phone/session config
+splusthon_config.json
+*.session
+*.session-journal

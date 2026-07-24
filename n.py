@@ -323,6 +323,7 @@ USER_SAVE_MIN_INTERVAL = 2.0
 TEXT_ONLY_MODE = True
 SPLUSTHON_PHONE = os.getenv("SPLUSTHON_PHONE", "")
 SPLUSTHON_SESSION = os.getenv("SPLUSTHON_SESSION", "solarwar_splus")
+SPLUSTHON_CONFIG_FILE = os.path.join(BASE_DIR, "splusthon_config.json")
 
 
 def remove_visual_reply_markup(kwargs: dict) -> dict:
@@ -351,10 +352,34 @@ def patch_telegram_text_only_mode() -> None:
     Bot.send_message = text_only_send_message
 
 
+def load_splusthon_phone() -> str:
+    """Read the Soroush Plus phone number from env, config file, or terminal prompt."""
+    phone = (SPLUSTHON_PHONE or "").strip()
+    if phone:
+        return phone
+
+    try:
+        with open(SPLUSTHON_CONFIG_FILE, "r", encoding="utf-8") as handle:
+            config = json.load(handle)
+        phone = str(config.get("phone", "")).strip()
+        if phone:
+            return phone
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+
+    print("شماره سروش‌پلاس را برای ورود splusthon وارد کن، مثال: 09123456789")
+    phone = input("شماره سروش‌پلاس: ").strip()
+    if not phone:
+        raise RuntimeError("شماره وارد نشد؛ بدون شماره امکان ورود به سروش‌پلاس نیست.")
+
+    with open(SPLUSTHON_CONFIG_FILE, "w", encoding="utf-8") as handle:
+        json.dump({"phone": phone}, handle, ensure_ascii=False, indent=2)
+    return phone
+
+
 def build_splusthon_client():
     """Create a Soroush Plus self-account client with phone-number login only."""
-    if not SPLUSTHON_PHONE:
-        raise RuntimeError("SPLUSTHON_PHONE را برای ورود شماره‌ای سروش‌پلاس تنظیم کنید.")
+    phone = load_splusthon_phone()
     try:
         import splusthon  # type: ignore
     except ImportError as exc:
@@ -369,10 +394,10 @@ def build_splusthon_client():
         raise RuntimeError("در splusthon کلاس Client/SPlusThon/Splus پیدا نشد.")
 
     attempts = (
-        {"phone": SPLUSTHON_PHONE, "session": SPLUSTHON_SESSION},
-        {"phone_number": SPLUSTHON_PHONE, "session": SPLUSTHON_SESSION},
-        {"phone": SPLUSTHON_PHONE},
-        {"phone_number": SPLUSTHON_PHONE},
+        {"phone": phone, "session": SPLUSTHON_SESSION},
+        {"phone_number": phone, "session": SPLUSTHON_SESSION},
+        {"phone": phone},
+        {"phone_number": phone},
         {"session": SPLUSTHON_SESSION},
         {},
     )
@@ -384,7 +409,7 @@ def build_splusthon_client():
                 for setter_name in ("login", "sign_in", "auth", "connect"):
                     setter = getattr(client, setter_name, None)
                     if callable(setter):
-                        setter(SPLUSTHON_PHONE)
+                        setter(phone)
                         break
             return client
         except TypeError as exc:
