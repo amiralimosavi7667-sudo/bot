@@ -11,20 +11,97 @@ from datetime import datetime, time, timedelta
 from logging.handlers import RotatingFileHandler
 from uuid import uuid4
 
-import requests
-from flask import Flask, jsonify, request
+class _DisabledRequests:
+    def post(self, *args, **kwargs):
+        raise RuntimeError("requests نصب نیست یا در نسخه سروش‌پلاس غیرفعال است.")
 
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyKeyboardMarkup, Update
-from telegram.constants import ChatAction
-from telegram.ext import (
-    ApplicationBuilder,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
-from telegram.ext import ApplicationHandlerStop
+
+class _DisabledFlaskApp:
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+    def route(self, *args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
+
+def jsonify(value):
+    return value
+
+
+class _DisabledRequest:
+    args = {}
+
+
+requests = _DisabledRequests()
+Flask = _DisabledFlaskApp
+request = _DisabledRequest()
+
+class _LegacyTelegramObject:
+    """Placeholder for removed Telegram types so this SPlusThon app imports without telegram."""
+
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+    def __call__(self, *args, **kwargs):
+        return self.__class__(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return self
+
+    def __and__(self, other):
+        return self
+
+    def __or__(self, other):
+        return self
+
+    def __invert__(self):
+        return self
+
+
+class Bot(_LegacyTelegramObject):
+    async def send_message(self, *args, **kwargs):
+        raise RuntimeError("Telegram حذف شده است؛ از splusthon برای سروش‌پلاس استفاده کنید.")
+
+
+class Message(_LegacyTelegramObject):
+    async def reply_text(self, *args, **kwargs):
+        raise RuntimeError("Telegram حذف شده است؛ از splusthon برای سروش‌پلاس استفاده کنید.")
+
+
+class InlineKeyboardButton(_LegacyTelegramObject):
+    pass
+
+
+class InlineKeyboardMarkup(_LegacyTelegramObject):
+    pass
+
+
+class ReplyKeyboardMarkup(_LegacyTelegramObject):
+    pass
+
+
+class Update(_LegacyTelegramObject):
+    pass
+
+
+class ChatAction:
+    TYPING = "typing"
+
+
+class ContextTypes:
+    DEFAULT_TYPE = object
+
+
+class ApplicationHandlerStop(Exception):
+    pass
+
+
+ApplicationBuilder = CallbackQueryHandler = CommandHandler = MessageHandler = _LegacyTelegramObject
+filters = _LegacyTelegramObject()
 
 # این برنامه برای سروش‌پلاس با کتابخانه splusthon و ورود شماره‌ای اجرا می‌شود.
 ADMIN_ACTIVATION_CODE = "admin1212121212"
@@ -2342,26 +2419,26 @@ async def safe_edit_message(
 
 def help_menu_text() -> str:
     return (
-        "📖 راهنما\n\n"
-        "این یک بازی استراتژیک تلگرامی است که در آن با حمله به دیگران، "
-        "دفاع از خود، جمع‌آوری منابع (سکه و جم) و رقابت در رنکینگ جهانی، "
-        "به قوی‌ترین بازیکن تبدیل می‌شوید!\n\n"
-        "### 🏠 منوهای اصلی:\n"
-        "- 🛒 فروشگاه: خرید موشک، پدافند و سپر.\n"
-        "- 📦 دارایی: مشاهده موجودی موشک‌ها، پدافندها، سکه، جم و غیره.\n"
-        "- 🏆 رنکینگ: جایگاه شما و دیگران در لیست جهانی.\n"
-        "- 🛡️ پدافند: مدیریت و انتخاب پدافند فعال.\n"
-        "- 🌐 حمله جهانی: جستجوی حریف تصادفی و حمله.\n"
-        "- 🎁 جایزه: دریافت جوایز روزانه.\n"
-        "- ⛏️ معدن طلا: تولید خودکار سکه.\n"
-        "- 👥 کلن: ایجاد یا پیوستن به کلن برای رقابت گروهی.\n"
-        "- ⚔️ کلن وار: رقابت ۱۰ در ۱۰ بین کلن‌ها.\n\n"
-        "### 💡 نکات کلی:\n"
-        "- حمله فقط به کاربران واقعی انجام می‌شود (نه ربات‌ها یا گروه‌ها).\n"
-        "- امکان حمله به ادمین‌های محافظت‌شده وجود ندارد.\n"
-        "- ادمین‌ها می‌توانند لول، رنگ، سکه، جم و غیره را تنظیم کنند.\n"
-        "- برای جزئیات هر بخش، از دکمه‌های زیر انتخاب کنید.\n\n"
-        "🔻 بخش مورد نظر را انتخاب کنید:"
+        "📖 راهنمای متنی سروش‌پلاس\n\n"
+        "این نسخه دیگر تلگرام و دکمه/کیبورد شیشه‌ای ندارد. برای باز شدن هر بخش، دقیقاً متن همان بخش را بفرستید.\n\n"
+        "دستورهای اصلی:\n"
+        "- برای رفتن به فروشگاه بنویس: فروشگاه 🛒\n"
+        "- برای دیدن دارایی‌ها بنویس: دارایی 📦\n"
+        "- برای خرید آیتم بنویس: خرید آیتم 💳\n"
+        "- برای خرید موشک بنویس: موشک 🚀\n"
+        "- برای خرید پدافند بنویس: پدافند 🛡️\n"
+        "- برای مدیریت پدافندها بنویس: پدافند ها 🛡️\n"
+        "- برای حمله جهانی بنویس: حمله جهانی 🌐\n"
+        "- برای بانک بنویس: بانک 🏦\n"
+        "- برای معدن طلا بنویس: معدن طلا ⛏️\n"
+        "- برای معدن جم بنویس: معدن جم 💎\n"
+        "- برای کلن بنویس: کلن 👥\n"
+        "- برای کلن وار بنویس: کلن وار ⚔️\n"
+        "- برای رنکینگ بنویس: رنکینگ 🏆\n"
+        "- برای جایزه روزانه بنویس: جایزه 🎁\n"
+        "- برای پشتیبانی بنویس: پشتیبانی 📞\n"
+        "- برای برگشت بنویس: بازگشت ↩️ یا بازگشت به منوی اصلی ↩️\n\n"
+        "مثال: اگر می‌خواهی وارد فروشگاه شوی، فقط همین متن را ارسال کن: فروشگاه 🛒"
     )
 
 
@@ -3006,10 +3083,7 @@ async def help_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if await reject_if_not_private(update):
         return
-    await update.message.reply_text(
-        help_menu_text(),
-        reply_markup=help_menu_markup(),
-    )
+    await update.message.reply_text(help_menu_text())
 
 
 async def help_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
