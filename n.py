@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import importlib
 import random
 import re
 import signal
@@ -324,6 +325,7 @@ TEXT_ONLY_MODE = True
 SPLUSTHON_PHONE = os.getenv("SPLUSTHON_PHONE", "")
 SPLUSTHON_SESSION = os.getenv("SPLUSTHON_SESSION", "solarwar_splus")
 SPLUSTHON_CONFIG_FILE = os.path.join(BASE_DIR, "splusthon_config.json")
+SPLUSTHON_STRING_SESSION = os.getenv("SPLUSTHON_STRING_SESSION", "")
 
 
 def remove_visual_reply_markup(kwargs: dict) -> dict:
@@ -352,78 +354,87 @@ def patch_telegram_text_only_mode() -> None:
     Bot.send_message = text_only_send_message
 
 
+def load_splusthon_config() -> dict:
+    try:
+        with open(SPLUSTHON_CONFIG_FILE, "r", encoding="utf-8") as handle:
+            config = json.load(handle)
+        return config if isinstance(config, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_splusthon_config(config: dict) -> None:
+    with open(SPLUSTHON_CONFIG_FILE, "w", encoding="utf-8") as handle:
+        json.dump(config, handle, ensure_ascii=False, indent=2)
+
+
 def load_splusthon_phone() -> str:
     """Read the Soroush Plus phone number from env, config file, or terminal prompt."""
     phone = (SPLUSTHON_PHONE or "").strip()
     if phone:
         return phone
 
-    try:
-        with open(SPLUSTHON_CONFIG_FILE, "r", encoding="utf-8") as handle:
-            config = json.load(handle)
-        phone = str(config.get("phone", "")).strip()
-        if phone:
-            return phone
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        pass
+    config = load_splusthon_config()
+    phone = str(config.get("phone", "")).strip()
+    if phone:
+        return phone
 
     print("شماره سروش‌پلاس را برای ورود splusthon وارد کن، مثال: 09123456789")
     phone = input("شماره سروش‌پلاس: ").strip()
     if not phone:
         raise RuntimeError("شماره وارد نشد؛ بدون شماره امکان ورود به سروش‌پلاس نیست.")
 
-    with open(SPLUSTHON_CONFIG_FILE, "w", encoding="utf-8") as handle:
-        json.dump({"phone": phone}, handle, ensure_ascii=False, indent=2)
+    config["phone"] = phone
+    save_splusthon_config(config)
     return phone
 
 
+def load_splusthon_string_session() -> str:
+    if SPLUSTHON_STRING_SESSION.strip():
+        return SPLUSTHON_STRING_SESSION.strip()
+    return str(load_splusthon_config().get("string_session", "")).strip()
+
+
+def save_splusthon_string_session(client) -> None:
+    session = getattr(client, "session", None)
+    saver = getattr(session, "save", None)
+    if not callable(saver):
+        return
+    session_string = saver()
+    if not session_string:
+        return
+    config = load_splusthon_config()
+    config["phone"] = getattr(client, "_solarwar_splus_phone", config.get("phone", ""))
+    config["string_session"] = session_string
+    save_splusthon_config(config)
+
+
 def build_splusthon_client():
-    """Create a Soroush Plus self-account client with phone-number login only."""
+    """Create a Soroush Plus userbot client with the real SPlusthon API."""
     phone = load_splusthon_phone()
-    try:
-        import splusthon  # type: ignore
-    except ImportError as exc:
-        raise RuntimeError("کتابخانه splusthon نصب نیست؛ اول با pip install splusthon نصبش کنید.") from exc
+    splusthon = importlib.import_module("splusthon")
+    sessions_module = importlib.import_module("splusthon.sessions")
+    SoroushClient = getattr(splusthon, "SoroushClient")
+    StringSession = getattr(sessions_module, "StringSession")
 
-    client_factory = (
-        getattr(splusthon, "Client", None)
-        or getattr(splusthon, "SPlusThon", None)
-        or getattr(splusthon, "Splus", None)
-    )
-    if client_factory is None:
-        raise RuntimeError("در splusthon کلاس Client/SPlusThon/Splus پیدا نشد.")
-
-    attempts = (
-        {"phone": phone, "session": SPLUSTHON_SESSION},
-        {"phone_number": phone, "session": SPLUSTHON_SESSION},
-        {"phone": phone},
-        {"phone_number": phone},
-        {"session": SPLUSTHON_SESSION},
-        {},
-    )
-    last_error = None
-    for kwargs in attempts:
-        try:
-            client = client_factory(**kwargs)
-            if not kwargs.get("phone") and not kwargs.get("phone_number"):
-                for setter_name in ("login", "sign_in", "auth", "connect"):
-                    setter = getattr(client, setter_name, None)
-                    if callable(setter):
-                        setter(phone)
-                        break
-            return client
-        except TypeError as exc:
-            last_error = exc
-    raise RuntimeError("ساخت کلاینت splusthon با امضای‌های شناخته‌شده ممکن نشد.") from last_error
-
+    session_string = load_splusthon_string_session()
+    client = SoroushClient(StringSession(session_string))
+    client._solarwar_splus_phone = phone
+    return client
 
 def run_splusthon_self_account() -> None:
     """Run only on Soroush Plus through SPlusThon; no Telegram token/runtime is used."""
     client = build_splusthon_client()
-    starter = getattr(client, "start", None) or getattr(client, "run", None) or getattr(client, "idle", None)
-    if starter is None:
-        raise RuntimeError("در کلاینت splusthon متد start/run/idle پیدا نشد.")
-    starter()
+    phone = getattr(client, "_solarwar_splus_phone", None)
+    try:
+        client.start(phone=phone)
+    except TypeError:
+        client.start()
+    save_splusthon_string_session(client)
+
+    runner = getattr(client, "run_until_disconnected", None) or getattr(client, "idle", None)
+    if callable(runner):
+        runner()
 
 LEAGUE_TIERS = [
     (0, "🎗 تازه‌کار"),
