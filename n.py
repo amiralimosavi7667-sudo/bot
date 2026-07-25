@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import importlib
 import random
 import re
 import signal
@@ -11,23 +12,99 @@ from datetime import datetime, time, timedelta
 from logging.handlers import RotatingFileHandler
 from uuid import uuid4
 
-import requests
-from flask import Flask, jsonify, request
+class _DisabledRequests:
+    def post(self, *args, **kwargs):
+        raise RuntimeError("requests نصب نیست یا در نسخه سروش‌پلاس غیرفعال است.")
 
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyKeyboardMarkup, Update
-from telegram.constants import ChatAction
-from telegram.ext import (
-    ApplicationBuilder,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
-from telegram.ext import ApplicationHandlerStop
 
-# 🔴 توکن باتت رو اینجا بذار
-TOKEN = "8122230876:AAHVnsvD3dw_z7PKi0sh7BxaR-3wiUDA5Bk"
+class _DisabledFlaskApp:
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+    def route(self, *args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
+
+def jsonify(value):
+    return value
+
+
+class _DisabledRequest:
+    args = {}
+
+
+requests = _DisabledRequests()
+Flask = _DisabledFlaskApp
+request = _DisabledRequest()
+
+class _LegacyTelegramObject:
+    """Placeholder for removed Telegram types so this SPlusThon app imports without telegram."""
+
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+    def __call__(self, *args, **kwargs):
+        return self.__class__(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return self
+
+    def __and__(self, other):
+        return self
+
+    def __or__(self, other):
+        return self
+
+    def __invert__(self):
+        return self
+
+
+class Bot(_LegacyTelegramObject):
+    async def send_message(self, *args, **kwargs):
+        raise RuntimeError("Telegram حذف شده است؛ از splusthon برای سروش‌پلاس استفاده کنید.")
+
+
+class Message(_LegacyTelegramObject):
+    async def reply_text(self, *args, **kwargs):
+        raise RuntimeError("Telegram حذف شده است؛ از splusthon برای سروش‌پلاس استفاده کنید.")
+
+
+class InlineKeyboardButton(_LegacyTelegramObject):
+    pass
+
+
+class InlineKeyboardMarkup(_LegacyTelegramObject):
+    pass
+
+
+class ReplyKeyboardMarkup(_LegacyTelegramObject):
+    pass
+
+
+class Update(_LegacyTelegramObject):
+    pass
+
+
+class ChatAction:
+    TYPING = "typing"
+
+
+class ContextTypes:
+    DEFAULT_TYPE = object
+
+
+class ApplicationHandlerStop(Exception):
+    pass
+
+
+ApplicationBuilder = CallbackQueryHandler = CommandHandler = MessageHandler = _LegacyTelegramObject
+filters = _LegacyTelegramObject()
+
+# این برنامه برای سروش‌پلاس با کتابخانه splusthon و ورود شماره‌ای اجرا می‌شود.
 ADMIN_ACTIVATION_CODE = "admin1212121212"
 ADMIN_IDS = {6930517587}
 SUPPORT_ADMIN_ID = 6930517587
@@ -244,6 +321,120 @@ duel_sessions: dict[str, dict] = {}
 duel_requests: dict[str, dict] = {}
 _USER_LAST_SAVE = 0.0
 USER_SAVE_MIN_INTERVAL = 2.0
+TEXT_ONLY_MODE = True
+SPLUSTHON_PHONE = os.getenv("SPLUSTHON_PHONE", "")
+SPLUSTHON_SESSION = os.getenv("SPLUSTHON_SESSION", "solarwar_splus")
+SPLUSTHON_CONFIG_FILE = os.path.join(BASE_DIR, "splusthon_config.json")
+SPLUSTHON_STRING_SESSION = os.getenv("SPLUSTHON_STRING_SESSION", "")
+
+
+def remove_visual_reply_markup(kwargs: dict) -> dict:
+    """Remove Telegram button panels so navigation stays completely text based."""
+    if TEXT_ONLY_MODE:
+        kwargs.pop("reply_markup", None)
+    return kwargs
+
+
+def patch_telegram_text_only_mode() -> None:
+    """Drop inline/reply keyboards from outgoing messages without changing game logic."""
+    if not TEXT_ONLY_MODE or getattr(Message.reply_text, "_text_only_patched", False):
+        return
+
+    original_reply_text = Message.reply_text
+    original_bot_send_message = Bot.send_message
+
+    async def text_only_reply_text(self, *args, **kwargs):
+        return await original_reply_text(self, *args, **remove_visual_reply_markup(kwargs))
+
+    async def text_only_send_message(self, *args, **kwargs):
+        return await original_bot_send_message(self, *args, **remove_visual_reply_markup(kwargs))
+
+    text_only_reply_text._text_only_patched = True
+    Message.reply_text = text_only_reply_text
+    Bot.send_message = text_only_send_message
+
+
+def load_splusthon_config() -> dict:
+    try:
+        with open(SPLUSTHON_CONFIG_FILE, "r", encoding="utf-8") as handle:
+            config = json.load(handle)
+        return config if isinstance(config, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_splusthon_config(config: dict) -> None:
+    with open(SPLUSTHON_CONFIG_FILE, "w", encoding="utf-8") as handle:
+        json.dump(config, handle, ensure_ascii=False, indent=2)
+
+
+def load_splusthon_phone() -> str:
+    """Read the Soroush Plus phone number from env, config file, or terminal prompt."""
+    phone = (SPLUSTHON_PHONE or "").strip()
+    if phone:
+        return phone
+
+    config = load_splusthon_config()
+    phone = str(config.get("phone", "")).strip()
+    if phone:
+        return phone
+
+    print("شماره سروش‌پلاس را برای ورود splusthon وارد کن، مثال: 09123456789")
+    phone = input("شماره سروش‌پلاس: ").strip()
+    if not phone:
+        raise RuntimeError("شماره وارد نشد؛ بدون شماره امکان ورود به سروش‌پلاس نیست.")
+
+    config["phone"] = phone
+    save_splusthon_config(config)
+    return phone
+
+
+def load_splusthon_string_session() -> str:
+    if SPLUSTHON_STRING_SESSION.strip():
+        return SPLUSTHON_STRING_SESSION.strip()
+    return str(load_splusthon_config().get("string_session", "")).strip()
+
+
+def save_splusthon_string_session(client) -> None:
+    session = getattr(client, "session", None)
+    saver = getattr(session, "save", None)
+    if not callable(saver):
+        return
+    session_string = saver()
+    if not session_string:
+        return
+    config = load_splusthon_config()
+    config["phone"] = getattr(client, "_solarwar_splus_phone", config.get("phone", ""))
+    config["string_session"] = session_string
+    save_splusthon_config(config)
+
+
+def build_splusthon_client():
+    """Create a Soroush Plus userbot client with the real SPlusthon API."""
+    phone = load_splusthon_phone()
+    splusthon = importlib.import_module("splusthon")
+    sessions_module = importlib.import_module("splusthon.sessions")
+    SoroushClient = getattr(splusthon, "SoroushClient")
+    StringSession = getattr(sessions_module, "StringSession")
+
+    session_string = load_splusthon_string_session()
+    client = SoroushClient(StringSession(session_string))
+    client._solarwar_splus_phone = phone
+    return client
+
+def run_splusthon_self_account() -> None:
+    """Run only on Soroush Plus through SPlusThon; no Telegram token/runtime is used."""
+    client = build_splusthon_client()
+    phone = getattr(client, "_solarwar_splus_phone", None)
+    try:
+        client.start(phone=phone)
+    except TypeError:
+        client.start()
+    save_splusthon_string_session(client)
+
+    runner = getattr(client, "run_until_disconnected", None) or getattr(client, "idle", None)
+    if callable(runner):
+        runner()
 
 LEAGUE_TIERS = [
     (0, "🎗 تازه‌کار"),
@@ -279,17 +470,7 @@ STARPASS_REWARDS = [
     {"day": 9, "label": "10000 سکه", "coins": 10000},
     {"day": 10, "label": "50 جم", "gems": 50},
 ]
-STARPASS_CHAT_STICKERS = [
-    ("🔥 استیکر آتش", "🔥"),
-    ("❄️ استیکر یخ", "❄️"),
-    ("⚡ استیکر برق", "⚡"),
-    ("⭐ استیکر ستاره", "⭐"),
-    ("💎 استیکر الماس", "💎"),
-    ("🌟 استیکر پریمیوم", "🌟"),
-    ("👑 استیکر تاج", "👑"),
-    ("🚀 استیکر موشک", "🚀"),
-    ("🎖️ استیکر مدال", "🎖️"),
-]
+STARPASS_CHAT_STICKERS = []
 
 GLOBAL_ATTACK_COOLDOWN_SECONDS = 90
 GLOBAL_ATTACK_REROLL_COST = 10
@@ -1748,10 +1929,8 @@ def normalize_gift_code(code: str) -> str:
 
 
 async def send_missile_sticker(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
-    try:
-        await context.bot.send_message(chat_id=chat_id, text="🚀💥")
-    except Exception:
-        return
+    """Text-only mode: do not send attack stickers/animation messages."""
+    return
 
 
 async def send_menu_transition(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2276,26 +2455,26 @@ async def safe_edit_message(
 
 def help_menu_text() -> str:
     return (
-        "📖 راهنما\n\n"
-        "این یک بازی استراتژیک تلگرامی است که در آن با حمله به دیگران، "
-        "دفاع از خود، جمع‌آوری منابع (سکه و جم) و رقابت در رنکینگ جهانی، "
-        "به قوی‌ترین بازیکن تبدیل می‌شوید!\n\n"
-        "### 🏠 منوهای اصلی:\n"
-        "- 🛒 فروشگاه: خرید موشک، پدافند و سپر.\n"
-        "- 📦 دارایی: مشاهده موجودی موشک‌ها، پدافندها، سکه، جم و غیره.\n"
-        "- 🏆 رنکینگ: جایگاه شما و دیگران در لیست جهانی.\n"
-        "- 🛡️ پدافند: مدیریت و انتخاب پدافند فعال.\n"
-        "- 🌐 حمله جهانی: جستجوی حریف تصادفی و حمله.\n"
-        "- 🎁 جایزه: دریافت جوایز روزانه.\n"
-        "- ⛏️ معدن طلا: تولید خودکار سکه.\n"
-        "- 👥 کلن: ایجاد یا پیوستن به کلن برای رقابت گروهی.\n"
-        "- ⚔️ کلن وار: رقابت ۱۰ در ۱۰ بین کلن‌ها.\n\n"
-        "### 💡 نکات کلی:\n"
-        "- حمله فقط به کاربران واقعی انجام می‌شود (نه ربات‌ها یا گروه‌ها).\n"
-        "- امکان حمله به ادمین‌های محافظت‌شده وجود ندارد.\n"
-        "- ادمین‌ها می‌توانند لول، رنگ، سکه، جم و غیره را تنظیم کنند.\n"
-        "- برای جزئیات هر بخش، از دکمه‌های زیر انتخاب کنید.\n\n"
-        "🔻 بخش مورد نظر را انتخاب کنید:"
+        "📖 راهنمای متنی سروش‌پلاس\n\n"
+        "این نسخه دیگر تلگرام و دکمه/کیبورد شیشه‌ای ندارد. برای باز شدن هر بخش، دقیقاً متن همان بخش را بفرستید.\n\n"
+        "دستورهای اصلی:\n"
+        "- برای رفتن به فروشگاه بنویس: فروشگاه 🛒\n"
+        "- برای دیدن دارایی‌ها بنویس: دارایی 📦\n"
+        "- برای خرید آیتم بنویس: خرید آیتم 💳\n"
+        "- برای خرید موشک بنویس: موشک 🚀\n"
+        "- برای خرید پدافند بنویس: پدافند 🛡️\n"
+        "- برای مدیریت پدافندها بنویس: پدافند ها 🛡️\n"
+        "- برای حمله جهانی بنویس: حمله جهانی 🌐\n"
+        "- برای بانک بنویس: بانک 🏦\n"
+        "- برای معدن طلا بنویس: معدن طلا ⛏️\n"
+        "- برای معدن جم بنویس: معدن جم 💎\n"
+        "- برای کلن بنویس: کلن 👥\n"
+        "- برای کلن وار بنویس: کلن وار ⚔️\n"
+        "- برای رنکینگ بنویس: رنکینگ 🏆\n"
+        "- برای جایزه روزانه بنویس: جایزه 🎁\n"
+        "- برای پشتیبانی بنویس: پشتیبانی 📞\n"
+        "- برای برگشت بنویس: بازگشت ↩️ یا بازگشت به منوی اصلی ↩️\n\n"
+        "مثال: اگر می‌خواهی وارد فروشگاه شوی، فقط همین متن را ارسال کن: فروشگاه 🛒"
     )
 
 
@@ -2940,10 +3119,7 @@ async def help_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if await reject_if_not_private(update):
         return
-    await update.message.reply_text(
-        help_menu_text(),
-        reply_markup=help_menu_markup(),
-    )
+    await update.message.reply_text(help_menu_text())
 
 
 async def help_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -8747,12 +8923,19 @@ async def log_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def main():
-    global telegram_app
     setup_logging()
     load_user_data_store()
     load_pending_payments()
     load_clan_data_store()
-    app = ApplicationBuilder().token(TOKEN).build()
+    run_splusthon_self_account()
+    return
+
+
+def run_legacy_telegram_runtime():
+    global telegram_app
+    patch_telegram_text_only_mode()
+    raise RuntimeError("Telegram runtime حذف شده است؛ برنامه فقط با splusthon برای سروش‌پلاس اجرا می‌شود.")
+    app = ApplicationBuilder().token("").build()
     telegram_app = app
 
     app.add_handler(MessageHandler(filters.ALL, membership_message_gate), group=-1)
